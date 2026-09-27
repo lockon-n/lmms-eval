@@ -98,6 +98,7 @@ AVAILABLE_SIMPLE_MODELS = {
     "qwen3_omni": "Qwen3_Omni",
     "qwen3_vl": "Qwen3_VL",
     "qwen3_5": "Qwen3_5",
+    "qwen3_5_sparse_blocks": "lmms_eval.models.simple.qwen3_5_sparse_blocks.Qwen3_5_SparseBlocks",
     "reka": "Reka",
     "ross": "Ross",
     "sam3": "SAM3",

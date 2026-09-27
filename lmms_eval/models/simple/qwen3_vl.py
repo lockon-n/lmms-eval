@@ -122,6 +122,7 @@ class Qwen3_VL(lmms):
             model_kwargs["attn_implementation"] = attn_implementation
 
         self._model = model_cls.from_pretrained(pretrained, **model_kwargs).eval()
+        self._configure_loaded_model()
         self.min_pixels = min_pixels
         self.max_pixels = max_pixels
         self.total_pixels = total_pixels
@@ -156,11 +157,18 @@ class Qwen3_VL(lmms):
             self.accelerator = accelerator
             if self.accelerator.is_local_main_process:
                 eval_logger.info(f"Using {accelerator.num_processes} devices with data parallelism")
-            self._rank = self.accelerator.local_process_index
+            self._rank = self.accelerator.process_index
             self._world_size = self.accelerator.num_processes
         else:
             self._rank = 0
             self._world_size = 1
+
+    def _configure_loaded_model(self) -> None:
+        """Allow variants to configure the model before distributed wrapping."""
+
+    def _processor_video_call_kwargs(self) -> dict[str, object]:
+        """Options for the final video processor call."""
+        return {"do_resize": False}
 
     @property
     def config(self):
@@ -384,7 +392,7 @@ class Qwen3_VL(lmms):
                 videos=video_inputs,
                 video_metadata=video_metadata_list,
                 **processed_video_kwargs,
-                do_resize=False,
+                **self._processor_video_call_kwargs(),
                 padding=True,
                 padding_side="left",
                 return_tensors="pt",
@@ -396,7 +404,7 @@ class Qwen3_VL(lmms):
                 videos=video_inputs,
                 video_metadata=video_metadata_list,
                 **processed_video_kwargs,
-                do_resize=False,
+                **self._processor_video_call_kwargs(),
                 return_tensors="pt",
             )
 
