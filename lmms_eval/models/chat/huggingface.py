@@ -2,11 +2,6 @@ import time
 from typing import List, Optional, Tuple, Union
 
 import torch
-
-try:
-    import decord
-except ImportError:
-    decord = None
 from accelerate import Accelerator, DistributedType
 from loguru import logger as eval_logger
 from tqdm import tqdm
@@ -175,7 +170,7 @@ class Huggingface(lmms):
     def loglikelihood(self, requests: List[Instance]) -> List[Tuple[float, bool]]:
         raise NotImplementedError("Loglikelihood is not implemented for Qwen2.5_VL")
 
-    def flatten(self, input):
+    def flatten(self, input):  # noqa: A002 - Preserve the existing keyword argument name.
         new_list = []
         for i in input:
             for j in i:

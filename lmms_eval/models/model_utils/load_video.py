@@ -1,6 +1,6 @@
 import importlib
 import os
-from typing import Optional, Union
+from typing import Any, Iterator, Optional, Union
 
 import numpy as np
 
@@ -30,20 +30,44 @@ def _import_pyav():
         raise ImportError("PyAV backend requires `av`. Install it via `uv add av`.") from exc
 
 
-def _import_decord():
+def import_decord():
+    """Import decord on demand.
+
+    Never import decord at module scope: `libdecord.so` statically links
+    libstdc++'s `atexit_thread.o` and re-exports `__cxa_thread_atexit`, and
+    decord dlopens it with RTLD_GLOBAL. Every shared library loaded *after*
+    libdecord therefore registers its `thread_local` destructors into decord's
+    private list instead of glibc's, and that list holds no reference on the
+    registering library. decord drains it from an `atexit` handler that runs
+    last, i.e. after Python teardown has already dlclosed some of those
+    libraries, so the interpreter dies with SIGSEGV (exit 139) through a
+    dangling destructor pointer -- after results are written, which makes it
+    look like a random crash at the end of an otherwise successful eval. This
+    is reproducible on XPU builds, where importing torch loads level-zero/libpti
+    after decord.
+
+    Importing decord from inside the function that decodes video keeps
+    libdecord out of the process unless a decord-backed decode really happens,
+    and when it does happen the accelerator runtime is already bound to glibc.
+    Callers should use this helper rather than adding their own function-local
+    `import decord`, so the deferred import lives in exactly one place.
+    """
     try:
         return importlib.import_module("decord")
     except ModuleNotFoundError as exc:
         raise ImportError("Decord backend requires the legacy video extra. Install via `uv sync --extra video-legacy`.") from exc
 
 
-def _probe_video_metadata(video_path: str) -> tuple[int, Optional[float]]:
+def _probe_video_metadata(video_path: str, *, count_frames: bool = False) -> tuple[int, Optional[float]]:
+    """Read PyAV metadata, optionally counting frames when the header omits them."""
     av = _import_pyav()
     container = av.open(video_path)
     try:
         stream = container.streams.video[0]
         total_frames = int(stream.frames or 0)
         frame_rate = float(stream.average_rate) if stream.average_rate is not None else None
+        if count_frames and total_frames <= 0:
+            total_frames = sum(1 for _ in container.decode(video=0))
         return total_frames, frame_rate
     finally:
         container.close()
@@ -81,7 +105,7 @@ def _compute_uniform_indices(total_frames: int, sampled_frm: int, force_include_
 
 
 def _open_decord_reader(video_path: Union[str, tuple, list]):
-    decord = _import_decord()
+    decord = import_decord()
     resolved_path = _resolve_video_path(video_path)
     num_threads = int(os.getenv("LMMS_VIDEO_DECORD_THREADS", "2"))
     return decord.VideoReader(resolved_path, ctx=decord.cpu(0), num_threads=num_threads)
@@ -114,7 +138,7 @@ def read_video_decord(
     *,
     num_frm: int = 8,
     fps: Optional[float] = None,
-    format="rgb24",
+    format="rgb24",  # noqa: A002 - Preserve the existing keyword argument name.
     force_include_last_frame=False,
 ) -> np.ndarray:
     if format != "rgb24":
@@ -149,16 +173,10 @@ def record_video_length_stream(container, indices):
     return frames
 
 
-# This one works for all types of video
-def record_video_length_packet(container):
-    frames = []
-    # https://github.com/PyAV-Org/PyAV/issues/1269
-    # https://www.cnblogs.com/beyond-tester/p/17641872.html
-    # context = CodecContext.create("libvpx-vp9", "r")
+def _iter_video_frames_packet(container: Any) -> Iterator[Any]:
+    """Yield decoded frames, including frames flushed by the final packet."""
     for packet in container.demux(video=0):
-        for frame in packet.decode():
-            frames.append(frame)
-    return frames
+        yield from packet.decode()
 
 
 def load_video_stream(container, num_frm: int = 8, fps: Optional[float] = None, force_include_last_frame=False):
@@ -177,16 +195,26 @@ def load_video_stream(container, num_frm: int = 8, fps: Optional[float] = None, 
 
 
 def load_video_packet(container, num_frm: int = 8, fps: Optional[float] = None, force_include_last_frame=False):
-    frames = record_video_length_packet(container)
-    total_frames = len(frames)
+    # Containers such as WebM/Matroska often omit the frame count. Count
+    # without retaining decoded frames, then rewind and keep only the sample.
+    # This trades a second decode pass for memory bounded by num_frm.
+    total_frames = sum(1 for _ in _iter_video_frames_packet(container))
     stream = container.streams.video[0]
     frame_rate = float(stream.average_rate) if stream.average_rate is not None else None
     sampled_frm = _compute_sample_count(total_frames, num_frm, fps, frame_rate)
     indices = _compute_uniform_indices(total_frames, sampled_frm, force_include_last_frame=force_include_last_frame)
-    return [frames[i] for i in indices]
+    container.seek(0)
+    index_set = set(indices.tolist())
+    frames = []
+    for index, frame in enumerate(_iter_video_frames_packet(container)):
+        if index in index_set:
+            frames.append(frame)
+        if index >= indices[-1]:
+            break
+    return frames
 
 
-def _frames_to_ndarray(frames, format: str) -> np.ndarray:
+def _frames_to_ndarray(frames, format: str) -> np.ndarray:  # noqa: A002 - Preserve the existing keyword argument name.
     if not frames:
         raise ValueError("Cannot decode frames from an empty video")
 
@@ -204,7 +232,7 @@ def read_video_torchcodec(
     *,
     num_frm: int = 8,
     fps: Optional[float] = None,
-    format="rgb24",
+    format="rgb24",  # noqa: A002 - Preserve the existing keyword argument name.
     force_include_last_frame=False,
 ) -> np.ndarray:
     resolved_path = _resolve_video_path(video_path)
@@ -266,7 +294,7 @@ def read_video_dali(
     *,
     num_frm: int = 8,
     fps: Optional[float] = None,
-    format="rgb24",
+    format="rgb24",  # noqa: A002 - Preserve the existing keyword argument name.
     force_include_last_frame=False,
 ) -> np.ndarray:
     resolved_path = _resolve_video_path(video_path)
@@ -324,7 +352,7 @@ def read_video(
     *,
     num_frm: int = 8,
     fps: Optional[float] = None,
-    format="rgb24",
+    format="rgb24",  # noqa: A002 - Preserve the existing keyword argument name.
     force_include_last_frame=False,
     backend: Optional[str] = None,
 ) -> np.ndarray:
@@ -388,7 +416,7 @@ def read_video_pyav(
     *,
     num_frm: int = 8,
     fps: Optional[float] = None,
-    format="rgb24",
+    format="rgb24",  # noqa: A002 - Preserve the existing keyword argument name.
     force_include_last_frame=False,
 ) -> np.ndarray:
     """Decode with PyAV, falling back to a full packet scan when needed."""

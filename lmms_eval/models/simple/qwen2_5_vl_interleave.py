@@ -3,7 +3,6 @@ import json
 from io import BytesIO
 from typing import List, Optional, Tuple, Union
 
-import decord
 import torch
 from accelerate import Accelerator, DistributedType
 from loguru import logger as eval_logger
@@ -172,7 +171,7 @@ class Qwen2_5_VL_Interleave(lmms):
     def loglikelihood(self, requests: List[Instance]) -> List[Tuple[float, bool]]:
         raise NotImplementedError("Loglikelihood is not implemented for Qwen2.5_VL")
 
-    def flatten(self, input):
+    def flatten(self, input):  # noqa: A002 - Preserve the existing keyword argument name.
         new_list = []
         for i in input:
             for j in i:
@@ -327,10 +326,6 @@ class Qwen2_5_VL_Interleave(lmms):
                             # with open("alb.json", "w") as f:
                             #     json.dump(message, f, indent=4)
                         else:
-                            vr = decord.VideoReader(visual)
-                            first_frame = vr[0].asnumpy()
-                            height, width = first_frame.shape[:2]
-                            # max_pixels = height * width
                             message.append(
                                 {
                                     "role": "user",

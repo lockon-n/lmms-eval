@@ -25,10 +25,10 @@ from pathlib import Path
 import requests
 import torch
 import yaml
-from decord import VideoReader, cpu
 from loguru import logger as eval_logger
 from PIL import Image
 
+from lmms_eval.models.model_utils.load_video import import_decord
 from lmms_eval.tasks._task_utils.file_utils import generate_submission_file
 
 SOCCERNET_PWD = os.getenv("SOCCERNET_PWD", "s0cc3rn3t")
@@ -99,7 +99,9 @@ def timestamp_to_seconds(timestamp):
 
 def load_video(video_file, duration, max_num_frames=16):
 
-    vr = VideoReader(video_file, ctx=cpu(0), num_threads=1)
+    decord = import_decord()
+
+    vr = decord.VideoReader(video_file, ctx=decord.cpu(0), num_threads=1)
     fps = vr.get_avg_fps()
     total_valid_frames = len(vr)
     num_frames = min(max_num_frames, int(total_valid_frames))
@@ -672,14 +674,14 @@ def FALCONbench_process_results_mcq(doc, results):
         all_choices.append(chr(ord("A") + i))
 
     parsed_pred = parse_multi_choice_response(pred, all_choices, index2ans)
-    id = doc["question_id"]
+    doc_id = doc["question_id"]
     gt_option = [chr(ord("A") + i) for i in range(len(doc["options"]))][doc["gt_option_idx"]]
-    acc = {"id": id, "dataset": doc["dataset"], "category": doc["category"], "answer": gt_option, "parsed_pred": parsed_pred}
+    acc = {"id": doc_id, "dataset": doc["dataset"], "category": doc["category"], "answer": gt_option, "parsed_pred": parsed_pred}
 
     return {
         "acc": acc,
         "submission": {
-            id: pred,
+            doc_id: pred,
         },
     }
 
@@ -703,20 +705,20 @@ def FALCONbench_process_results_mcq_temploc(doc, results):
         all_choices.append(chr(ord("A") + i))
 
     parsed_pred = parse_multi_choice_response(pred, all_choices, index2ans)
-    id = doc["question_id"]
+    doc_id = doc["question_id"]
     gt_option = [chr(ord("A") + i) for i in range(len(doc["options"]))][doc["gt_option_idx"]]
-    acc = {"id": id, "dataset": doc["dataset"], "category": doc["category"], "answer": gt_option, "parsed_pred": parsed_pred}
+    acc = {"id": doc_id, "dataset": doc["dataset"], "category": doc["category"], "answer": gt_option, "parsed_pred": parsed_pred}
 
     acc["pred_dict"] = pred_dict
     if "temporal_window" in pred_dict:
         temp_loc_dict = evaluate_temporal_localization(pred_dict["temporal_window"], doc["gt_time_interval"])
         acc["temp_loc"] = temp_loc_dict
     else:
-        raise ValueError(f"No temporal_window found in prediction for question_id {id}. The output must be a dictionary with 'response' and 'temporal_window' keys.")
+        raise ValueError(f"No temporal_window found in prediction for question_id {doc_id}. The output must be a dictionary with 'response' and 'temporal_window' keys.")
     return {
         "acc": acc,
         "submission": {
-            id: pred,
+            doc_id: pred,
         },
     }
 
