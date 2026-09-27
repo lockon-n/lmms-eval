@@ -22,6 +22,52 @@ configuration, selected blocks, frame classification and visual token counts.
 `do_resize=False` disables the final native processor resize; adaptive P-frame
 budget resizing still runs, after upstream video preparation.
 
+## Pipeline overview
+
+**Blue nodes highlight steps added or adapted by Sparse Blocks.** Gray nodes
+show the native Qwen evaluation path and shared components. Processor and model
+execution are adapted together; ViT, merger, and LLM weights remain unchanged.
+
+```mermaid
+flowchart TD
+    A["Video decoding, frame sampling, and base resize"] --> B{"Video processing path"}
+    B --> C["Native Qwen: full spatial grids"]
+    B --> D["Sparse Blocks: low-resolution RGB difference scan"]
+    D --> E["I groups: retain full spatial grids"]
+    D --> F["P groups: score changes in 32 x 32 blocks"]
+    F --> G["Choose budget; resize and reselect blocks as needed"]
+    E --> H["Gather retained patches and spatial coordinates"]
+    G --> H
+    C --> I["Native ViT and merger"]
+    H --> J["Sparse ViT execution and position encoding; reuse native weights"]
+    J --> L["Align video placeholders, timestamps, and LLM M-RoPE"]
+    L -.-> O["Optional: reference-grid H/W coordinates"]
+    I --> K["Visual tokens and text: native LLM generation"]
+    L --> K
+    K --> M["Benchmark scoring"]
+
+    classDef native fill:#f1f5f9,stroke:#64748b,color:#0f172a;
+    classDef sparse fill:#dbeafe,stroke:#2563eb,stroke-width:2px,color:#1e3a8a;
+    class A,B,C,I,K,M native;
+    class D,E,F,G,H,J,L,O sparse;
+```
+
+The processor performs frame classification, budget-driven resizing, and block
+selection **before patch embedding**. Only retained patches enter the vision
+encoder. The model uses their spatial coordinates for vision position encoding
+and LLM M-RoPE, while the processor supplies matching video placeholders and
+timestamps.
+
+`llm_spatial_grid=resized` (default) uses the final resized grid for LLM spatial
+positions. `llm_spatial_grid=reference` maps retained block centers back to the
+grid before adaptive P-frame resizing. This option changes the H/W coordinates
+of LLM M-RoPE; timestamp construction and the ViT coordinate system are unchanged.
+
+Budgets are resize targets, not strict top-K caps: grid alignment and block
+reselection can leave the final token count above the target. When few blocks
+change, they can be retained directly; widespread changes use a lower-resolution
+full-frame thumbnail.
+
 ## Method and controls
 
 Adjacent RGB differences classify I/P frames. I groups keep the full spatial
